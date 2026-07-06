@@ -9,7 +9,7 @@
   :root{
     --bg:#f4f2ee; --card:#fff; --ink:#26221e; --muted:#8b8378; --line:#e3ddd2;
     --accent:#7d2e2e; --ok:#2e6b3f; --warn:#a86414; --bad:#b3392f;
-    --res:#7d2e2e; --exp:#1f5f8b; --blk:#6b6257; --seated:#2e6b3f;
+    --res:#7d2e2e; --exp:#1f5f8b; --xpr:#6d4a92; --blk:#6b6257; --seated:#2e6b3f;
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);font-size:14px}
@@ -39,7 +39,8 @@
   .hidden{display:none!important}
   .muted{color:var(--muted)}
   .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;color:#fff}
-  .pill.standard{background:var(--res)} .pill.experience{background:var(--exp)}
+  .pill.standard{background:var(--res)} .pill.experience{background:var(--xpr)}
+  .pill.event{background:var(--exp)}
   .pill.event_block{background:var(--blk)} .pill.private{background:var(--warn)}
   .pill.st-seated{background:var(--seated)} .pill.st-cancelled,.pill.st-no_show{background:#999}
   .pill.st-completed{background:#5a5a5a} .pill.st-pending{background:var(--warn)} .pill.st-confirmed{background:var(--res)}
@@ -151,7 +152,8 @@
         <div class="tl"><div class="tl-grid" id="timeline"></div></div>
         <div class="legend">
           <span><i style="background:var(--res)"></i>Reservation</span>
-          <span><i style="background:var(--exp)"></i>Experience</span>
+          <span><i style="background:var(--xpr)"></i>Experience</span>
+          <span><i style="background:var(--exp)"></i>Event guest</span>
           <span><i style="background:var(--blk)"></i>Event block</span>
           <span><i style="background:var(--seated)"></i>Seated</span>
         </div>
@@ -245,6 +247,9 @@
         </div>
         <h3>Seating hours <span class="muted" style="font-weight:normal">— first to last seating, e.g. <code>17:00-21:00</code>; separate two windows with a comma; blank = closed</span></h3>
         <div id="stHours"></div>
+        <h3>Experiences <span class="muted" style="font-weight:normal">— paid reservations offered on the booking page; price is per person</span></h3>
+        <div id="stExp"></div>
+        <button class="btn ghost small" onclick="addExpType()">+ Add experience</button>
         <h3>Locations <span class="muted" style="font-weight:normal">— comma separated; first with a floor plan takes bookings</span></h3>
         <input id="stLocations">
         <h3>Closures <span class="muted" style="font-weight:normal">— dates YYYY-MM-DD, one per line</span></h3>
@@ -299,7 +304,7 @@ const $=id=>document.getElementById(id);
 const esc=s=>{const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;};
 const money=c=>'$'+((c||0)/100).toLocaleString(undefined,{minimumFractionDigits:2});
 
-let SETTINGS=null, TZ='America/Chicago', LOC='Memphis', TABLES=[], COMBOS=[], dayData={res:[],events:[]}, floorRes=[], selTableId=null, dragging=null;
+let SETTINGS=null, TZ='America/Chicago', LOC='Memphis', TABLES=[], COMBOS=[], EXPTYPES=[], dayData={res:[],events:[]}, floorRes=[], selTableId=null, dragging=null;
 const comboById=id=>COMBOS.find(c=>c.id===id);
 function expOnTable(r,tableId){
   if(r.assigned_combo_id){ const c=comboById(r.assigned_combo_id); return !!c&&c.table_ids.includes(tableId); }
@@ -395,12 +400,13 @@ async function enterApp(session){
 
 /* ---------------- boot / nav ---------------- */
 async function boot(){
-  const [{data:st},{data:tbl},{data:cmb}]=await Promise.all([
+  const [{data:st},{data:tbl},{data:cmb},{data:ext}]=await Promise.all([
     sb.from('rb_settings').select('data').eq('id',1).single(),
     sb.from('rb_tables').select('*').order('sort_order'),
-    sb.from('rb_table_combos').select('*')
+    sb.from('rb_table_combos').select('*'),
+    sb.from('rb_experience_types').select('*').order('sort_order')
   ]);
-  SETTINGS=st.data; TZ=SETTINGS.timezone||TZ; TABLES=tbl||[]; COMBOS=cmb||[];
+  SETTINGS=st.data; TZ=SETTINGS.timezone||TZ; TABLES=tbl||[]; COMBOS=cmb||[]; EXPTYPES=ext||[];
   LOC=SETTINGS.location||'Memphis';
   $('locSel').innerHTML=(SETTINGS.locations||[LOC]).map(l=>`<option ${l===LOC?'selected':''}>${esc(l)}</option>`).join('');
   $('dayDate').value=todayStr(); $('floorDate').value=todayStr();
@@ -480,12 +486,12 @@ function renderTimeline(){
   const rows=[...locTables().filter(t=>t.active).map(t=>({id:t.id,label:t.name})),{id:null,label:'Unassigned'}];
   for(const row of rows){
     const items=active.filter(r=>{
-      if(r.kind==='experience') return row.id? expOnTable(r,row.id) : (!r.assigned_table_id&&!r.assigned_combo_id);
+      if(r.kind==='event') return row.id? expOnTable(r,row.id) : (!r.assigned_table_id&&!r.assigned_combo_id);
       const tids=(r.rb_reservation_tables||[]).filter(a=>a.active).map(a=>a.table_id);
       if(r.kind==='event_block'){
         // hide the block bar where a guest is already shown on that table
         return row.id? tids.includes(row.id) &&
-          !active.some(x=>x.kind==='experience'&&x.event_id===r.event_id&&expOnTable(x,row.id)) : false;
+          !active.some(x=>x.kind==='event'&&x.event_id===r.event_id&&expOnTable(x,row.id)) : false;
       }
       return row.id? tids.includes(row.id) : tids.length===0;
     });
@@ -495,7 +501,7 @@ function renderTimeline(){
       const l=Math.max(0,minutesOf(r.starts_at,dayStart))/totalMin*100;
       const wRaw=(minutesOf(r.ends_at,dayStart)-Math.max(0,minutesOf(r.starts_at,dayStart)))/totalMin*100;
       const w=Math.max(2,Math.min(wRaw,100-l));
-      const col=r.status==='seated'?'var(--seated)':`var(--${r.kind==='standard'?'res':r.kind==='experience'?'exp':r.kind==='event_block'?'blk':'warn'})`;
+      const col=r.status==='seated'?'var(--seated)':`var(--${r.kind==='standard'?'res':r.kind==='experience'?'xpr':r.kind==='event'?'exp':r.kind==='event_block'?'blk':'warn'})`;
       html+=`<div class="tl-block" style="left:${l}%;width:${w}%;background:${col}" onclick="openRes('${r.id}')"
         title="${esc(r.guest_name)} · ${fmtT(r.starts_at)}">${esc(r.guest_name||'—')} (${r.party_size})</div>`;
     }
@@ -504,7 +510,7 @@ function renderTimeline(){
 }
 
 function resTableNames(r){
-  if(r.kind==='experience'){
+  if(r.kind==='event'){
     if(r.assigned_combo_id) return (comboById(r.assigned_combo_id)||{}).name||'';
     return r.assigned_table_id? tableName(r.assigned_table_id) : '';
   }
@@ -529,13 +535,14 @@ const tableName=id=>(TABLES.find(t=>t.id===id)||{}).name||'?';
 async function openRes(id){
   const r=dayData.res.find(x=>x.id===id)||findCache.find(x=>x.id===id);
   if(!r) return;
-  const tids=r.kind==='experience'
+  const tids=r.kind==='event'
     ? (r.assigned_table_id? [r.assigned_table_id] : [])
     : (r.rb_reservation_tables||[]).filter(a=>a.active).map(a=>a.table_id);
   const opts=['<option value="">— none —</option>',...TABLES.filter(t=>t.active&&t.location===(r.location||LOC)).map(t=>
     `<option value="${t.id}" ${tids.includes(t.id)?'selected':''}>${esc(t.name)} (${t.seats_min}–${t.seats_max})</option>`)].join('');
   $('rdBody').innerHTML=`
-    <h2>${esc(r.guest_name||'(no name)')} <span class="pill ${r.kind}">${r.kind.replace('_',' ')}</span></h2>
+    <h2>${esc(r.guest_name||'(no name)')} <span class="pill ${r.kind}">${r.kind.replace('_',' ')}</span>
+      ${r.experience_type_id?`<span class="pill experience">${esc((EXPTYPES.find(x=>x.id===r.experience_type_id)||{}).name||'')}</span>`:''}</h2>
     <p class="muted">${fmtD(r.starts_at)} · ${fmtT(r.starts_at)}–${fmtT(r.ends_at)} · party of ${r.party_size}
       ${r.code?`· code <b>${r.code}</b>`:''}${r.total_cents?` · ${money(r.total_cents)} (${r.payment_status})`:''}</p>
     ${r.email?`<p>${esc(r.email)} ${r.phone?'· '+esc(r.phone):''}</p>`:''}
@@ -560,8 +567,8 @@ async function saveRes(id){
   const status=$('rdStatus').value, tid=$('rdTable').value;
   const {error:e1}=await sb.from('rb_reservations').update({status}).eq('id',id);
   if(e1){m.className='msg bad';m.textContent=e1.message;return;}
-  if(r.kind==='experience'){
-    // experiences share event tables: just move the seat-chart assignment
+  if(r.kind==='event'){
+    // event guests share the event's claimed tables: just move the seat-chart assignment
     const {error:e3}=await sb.from('rb_reservations')
       .update({assigned_table_id:tid||null, assigned_combo_id:null}).eq('id',id);
     if(e3){m.className='msg bad';m.textContent=e3.message;return;}
@@ -659,7 +666,7 @@ async function loadFloorDay(){
   floorRes=data||[]; renderFloor();
 }
 function resOnTable(r,tableId){
-  if(r.kind==='experience') return expOnTable(r,tableId);
+  if(r.kind==='event') return expOnTable(r,tableId);
   return (r.rb_reservation_tables||[]).some(a=>a.active&&a.table_id===tableId);
 }
 function floorIsToday(){ return ($('floorDate').value||todayStr())===todayStr(); }
@@ -819,6 +826,29 @@ function fillSettingsForm(){
   }).join('');
   $('stClosures').value=(s.closures||[]).join('\n');
   $('stLocations').value=(s.locations||['Memphis','Nashville','Franklin']).join(', ');
+  renderExpTypes();
+}
+function renderExpTypes(){
+  $('stExp').innerHTML=EXPTYPES.map((x,i)=>`
+    <div style="border-top:1px solid var(--line);padding:8px 0">
+      <div class="row">
+        <div style="flex:2"><label>Name</label><input id="exN${i}" value="${esc(x.name)}"></div>
+        <div><label>$ / person</label><input id="exP${i}" type="number" step="0.01" min="0" value="${(x.price_cents/100).toFixed(2)}"></div>
+        <div><label>Minutes</label><input id="exD${i}" type="number" value="${x.duration_min}"></div>
+        <div><label>Min party</label><input id="exMin${i}" type="number" value="${x.min_party}"></div>
+        <div><label>Max party</label><input id="exMax${i}" type="number" value="${x.max_party}"></div>
+        <div style="flex:0 0 70px"><label>Active</label><input type="checkbox" id="exA${i}" style="width:auto" ${x.active?'checked':''}></div>
+      </div>
+      <label>Description</label><input id="exDesc${i}" value="${esc(x.description||'')}">
+    </div>`).join('');
+}
+async function addExpType(){
+  const {data,error}=await sb.from('rb_experience_types').insert({
+    name:'New Experience', price_cents:0, duration_min:90, min_party:1, max_party:8,
+    sort_order:EXPTYPES.length+1, active:false
+  }).select().single();
+  if(error){ alert(error.message); return; }
+  EXPTYPES.push(data); renderExpTypes();
 }
 async function saveSettings(){
   const m=$('stMsg'); m.className='msg';
@@ -844,6 +874,15 @@ async function saveSettings(){
     hours, closures};
   const {error}=await sb.from('rb_settings').update({data,updated_at:new Date().toISOString()}).eq('id',1);
   if(error){ m.className='msg bad'; m.textContent=error.message; return; }
+  for(let i=0;i<EXPTYPES.length;i++){
+    const x=EXPTYPES[i];
+    const upd={ name:$('exN'+i).value.trim(), price_cents:Math.round(parseFloat($('exP'+i).value||'0')*100),
+      duration_min:+$('exD'+i).value||90, min_party:+$('exMin'+i).value||1, max_party:+$('exMax'+i).value||8,
+      active:$('exA'+i).checked, description:$('exDesc'+i).value };
+    const {error:e2}=await sb.from('rb_experience_types').update(upd).eq('id',x.id);
+    if(e2){ m.className='msg bad'; m.textContent=`Experience "${upd.name}": ${e2.message}`; return; }
+    Object.assign(x,upd);
+  }
   SETTINGS=data; m.className='msg ok'; m.textContent='Settings saved.';
   if(!SETTINGS.locations.includes(LOC)) LOC=SETTINGS.locations[0];
   $('locSel').innerHTML=SETTINGS.locations.map(l=>`<option ${l===LOC?'selected':''}>${esc(l)}</option>`).join('');

@@ -47,10 +47,12 @@ RPC functions (called by the pages): `rb_get_availability`, `rb_create_reservati
 
 ## Ties to the existing site
 
-- Experiences listed on book.html come straight from the existing `events` table
-  (kinds `experience`, `event_tabled`, `event_single`). Booking one creates a normal
-  `registrations` row (so the classes site sees it) **plus** a linked reservation that
-  holds a table.
+- **Experiences are paid reservations** (Grazing Table, Fondue Dinner, Raclette Dinner,
+  Wine & Cheese Tasting) — defined in `rb_experience_types`, edited in dashboard Settings,
+  booked on book.html like a normal reservation with a per-person price.
+- **Events are separate**: classes/mahjong etc. sell on the tickets site; a database
+  trigger on `registrations` automatically seats every event booking onto the table
+  calendar (kind `event`), and refunds free the seats. No sales channel can bypass it.
 - Classes/events hosted in the dining room: open the day in the admin, hit
   **"Block all tables"** on the event — existing reservations are kept, free tables are
   blocked for the event's time window.

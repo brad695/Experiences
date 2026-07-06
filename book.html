@@ -131,8 +131,8 @@
   <!-- ============ EXPERIENCES ============ -->
   <div id="paneExp" class="hidden">
     <div class="card">
-      <h2>Upcoming experiences</h2>
-      <p class="note" style="margin-top:0">Ticketed evenings at the shop — seating is reserved for you automatically.</p>
+      <h2>Experiences</h2>
+      <p class="note" style="margin-top:0">A reserved table and something special on it — pick your experience, then choose any date and time.</p>
       <div id="expList"><span class="spin">Loading…</span></div>
     </div>
   </div>
@@ -157,14 +157,12 @@
   <div class="modal">
     <h2 id="exmTitle"></h2>
     <p class="note" id="exmMeta" style="margin-top:-4px"></p>
-    <div id="exmModeRow" class="hidden">
-      <label>How would you like to book?</label>
-      <select id="exmMode"></select>
+    <div class="row">
+      <div><label>Date</label><input type="date" id="exmDate"></div>
+      <div><label>Party size</label><select id="exmParty"></select></div>
     </div>
-    <div id="exmQtyRow">
-      <label>Seats</label>
-      <select id="exmQty"></select>
-    </div>
+    <label>Time</label>
+    <div id="exmSlots" class="slots"><span class="spin">Pick a date…</span></div>
     <div class="row">
       <div><label>Name</label><input id="exmName"></div>
       <div><label>Email</label><input id="exmEmail" type="email"></div>
@@ -172,10 +170,10 @@
     <div class="row">
       <div><label>Phone</label><input id="exmPhone" type="tel"></div>
     </div>
-    <label>Notes</label>
+    <label>Notes (allergies, occasions…)</label>
     <textarea id="exmNotes"></textarea>
     <p class="note" id="exmTotal"></p>
-    <button class="btn" id="exmSubmit" onclick="submitExperience()">Reserve seats</button>
+    <button class="btn" id="exmSubmit" onclick="submitExperience()">Book experience</button>
     <button class="btn ghost" style="margin-left:8px" onclick="closeExpModal()">Close</button>
     <div class="msg" id="exmMsg"></div>
   </div>
@@ -287,28 +285,28 @@ async function submitBooking(){
   finally{ btn.disabled=false; btn.textContent='Confirm reservation'; }
 }
 
-/* ---------- experiences ---------- */
-let expLoaded=false, expItems=[], expCurrent=null;
+/* ---------- experiences: paid reservations ---------- */
+let expLoaded=false, expTypes=[], expCurrent=null, expPickedTime=null;
 
 async function loadExperiences(){
   expLoaded=true;
   const box=$('expList');
   try{
-    expItems = await rpc('rb_list_experiences');
-    if(!expItems.length){ box.innerHTML='<span class="spin">Nothing on the calendar right now — check back soon!</span>'; return; }
-    box.innerHTML = expItems.map((e,i)=>`
+    const res=await fetch(`${SUPA_URL}/rest/v1/rb_experience_types?active=eq.true&order=sort_order`,
+      {headers:{apikey:SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`}});
+    expTypes=await res.json();
+    if(!expTypes.length){ box.innerHTML='<span class="spin">Experiences are coming soon!</span>'; return; }
+    box.innerHTML = expTypes.map((e,i)=>`
       <div class="exp">
         <div>
-          <h3>${esc(e.title)}</h3>
-          <div class="meta">${fmtDate(e.date)} · ${fmt12(e.time)} · ${e.location}</div>
-          ${e.blurb?`<p class="blurb">${esc(e.blurb)}</p>`:''}
+          <h3>${esc(e.name)}</h3>
+          <div class="meta">${e.duration_min} minutes · parties of ${e.min_party}–${e.max_party}</div>
+          ${e.description?`<p class="blurb">${esc(e.description)}</p>`:''}
         </div>
         <div class="side">
-          <div class="price">${money(e.price)}</div>
-          ${e.remaining>0
-            ? `<div class="left">${e.remaining} seat${e.remaining===1?'':'s'} left</div>
-               <button class="btn" style="margin-top:0;padding:9px 18px" onclick="openExpModal(${i})">Book</button>`
-            : `<div class="soldout">Sold out</div>`}
+          <div class="price">${money(e.price_cents)}</div>
+          <div class="left">per person</div>
+          <button class="btn" style="margin-top:0;padding:9px 18px" onclick="openExpModal(${i})">Book</button>
         </div>
       </div>`).join('');
   }catch(e){ box.innerHTML='<span class="spin">Could not load experiences.</span>'; }
@@ -317,61 +315,65 @@ async function loadExperiences(){
 function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
 
 function openExpModal(i){
-  expCurrent=expItems[i];
-  $('exmTitle').textContent=expCurrent.title;
-  $('exmMeta').textContent=`${fmtDate(expCurrent.date)} · ${fmt12(expCurrent.time)} · ${money(expCurrent.price)} per person · ${expCurrent.location}`;
-  const modes=expCurrent.sale_modes||['individual'];
-  const tableSize=expCurrent.party_size||1;
-  const tableOk=(modes.includes('table')) && tableSize>1 && expCurrent.remaining>=tableSize;
-  const seatsOk=modes.includes('individual')||modes.includes('split')||!tableOk;
-  const ms=$('exmMode'); ms.innerHTML='';
-  if(tableOk && seatsOk){
-    ms.add(new Option(`Individual seats — ${money(expCurrent.price)} each`,'seats'));
-    ms.add(new Option(`Whole table for ${tableSize} — ${money(expCurrent.price*tableSize)}`,'table'));
-    $('exmModeRow').classList.remove('hidden');
-  }else if(tableOk){
-    ms.add(new Option(`Whole table for ${tableSize} — ${money(expCurrent.price*tableSize)}`,'table'));
-    $('exmModeRow').classList.remove('hidden');
-  }else{
-    $('exmModeRow').classList.add('hidden');
-  }
-  ms.onchange=syncExpMode;
-  const q=$('exmQty'); q.innerHTML='';
-  for(let n=1;n<=Math.min(expCurrent.remaining,8);n++) q.add(new Option(`${n} seat${n>1?'s':''}`,n));
-  q.onchange=updateExpTotal;
-  syncExpMode();
+  expCurrent=expTypes[i]; expPickedTime=null;
+  $('exmTitle').textContent=expCurrent.name;
+  $('exmMeta').textContent=`${money(expCurrent.price_cents)} per person · ${expCurrent.duration_min} minutes`;
+  const d=$('exmDate');
+  const today=new Date();
+  d.min=today.toISOString().slice(0,10);
+  const max=new Date(today); max.setDate(max.getDate()+(SETTINGS.horizon_days||60));
+  d.max=max.toISOString().slice(0,10);
+  d.value=d.min;
+  d.onchange=loadExpSlots;
+  const p=$('exmParty'); p.innerHTML='';
+  for(let n=expCurrent.min_party;n<=expCurrent.max_party;n++) p.add(new Option(`${n} guest${n>1?'s':''}`,n));
+  p.onchange=()=>{ updateExpTotal(); loadExpSlots(); };
+  updateExpTotal();
   $('exmMsg').className='msg';
   $('expModalBg').classList.add('open');
+  loadExpSlots();
 }
-function expMode(){ return $('exmModeRow').classList.contains('hidden')?'seats':$('exmMode').value; }
-function syncExpMode(){
-  $('exmQtyRow').classList.toggle('hidden', expMode()==='table');
-  updateExpTotal();
+async function loadExpSlots(){
+  expPickedTime=null;
+  const box=$('exmSlots'); box.innerHTML='<span class="spin">Checking availability…</span>';
+  try{
+    const r=await rpc('rb_get_availability',{p_date:$('exmDate').value, p_party:+$('exmParty').value,
+      p_location:pickedLoc(), p_experience:expCurrent.id});
+    box.innerHTML='';
+    if(!r.ok){ box.innerHTML=`<span class="spin" style="grid-column:1/-1">${esc(r.error)}</span>`; return; }
+    if(r.closed || !r.slots.length){ box.innerHTML='<span class="spin" style="grid-column:1/-1">We’re closed this day — try another date.</span>'; return; }
+    for(const s of r.slots){
+      const b=document.createElement('button');
+      b.type='button';
+      b.textContent=fmt12(s.time); b.disabled=!s.available;
+      b.onclick=()=>{ expPickedTime=s.time; [...box.children].forEach(c=>c.classList.remove('on')); b.classList.add('on'); };
+      box.appendChild(b);
+    }
+    if(!r.slots.some(s=>s.available))
+      box.insertAdjacentHTML('beforeend','<span class="spin" style="grid-column:1/-1">Fully booked — try another date.</span>');
+  }catch(e){ box.innerHTML='<span class="spin">Could not load availability.</span>'; }
 }
-function expQty(){ return expMode()==='table'? (expCurrent.party_size||1) : +$('exmQty').value; }
 function updateExpTotal(){
-  $('exmTotal').textContent=`Total: ${money(expCurrent.price * expQty())}`
-    + (expMode()==='table'? ` — a table for ${expCurrent.party_size} is yours for the night.` : '')
-    + ' Payment is collected at the restaurant.';
+  $('exmTotal').textContent=`Total: ${money(expCurrent.price_cents * +$('exmParty').value)} — payment is collected at the restaurant.`;
 }
 function closeExpModal(){ $('expModalBg').classList.remove('open'); }
 
 async function submitExperience(){
   const m=$('exmMsg'); m.className='msg';
+  if(!expPickedTime){ m.className='msg bad'; m.textContent='Pick a time first.'; return; }
   const btn=$('exmSubmit'); btn.disabled=true; btn.textContent='Booking…';
   try{
-    const r = await rpc('rb_book_experience',{
-      p_event_id:expCurrent.id, p_qty:expQty(),
+    const r = await rpc('rb_create_experience',{
+      p_experience:expCurrent.id, p_date:$('exmDate').value, p_time:expPickedTime,
+      p_party:+$('exmParty').value,
       p_name:$('exmName').value, p_email:$('exmEmail').value,
-      p_phone:$('exmPhone').value, p_notes:$('exmNotes').value,
-      p_own_table:expMode()==='table'
+      p_phone:$('exmPhone').value, p_notes:$('exmNotes').value, p_location:pickedLoc()
     });
-    if(!r.ok){ m.className='msg bad'; m.textContent=r.error; return; }
+    if(!r.ok){ m.className='msg bad'; m.textContent=r.error; if(/just booked/i.test(r.error)) loadExpSlots(); return; }
     m.className='msg ok';
-    m.textContent=`Booked! Confirmation code ${r.code}. Total ${money(r.total_cents)}${r.table_assigned?' — a table is reserved for your group.':''}`;
-    expLoaded=false; loadExperiences();
+    m.textContent=`${r.experience} booked for ${r.time}! Confirmation code ${r.code}. Total ${money(r.total_cents)}.`;
   }catch(e){ m.className='msg bad'; m.textContent='Something went wrong. Please try again.'; }
-  finally{ btn.disabled=false; btn.textContent='Reserve seats'; }
+  finally{ btn.disabled=false; btn.textContent='Book experience'; }
 }
 
 /* ---------- manage ---------- */
