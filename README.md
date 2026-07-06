@@ -24,9 +24,22 @@ database, so no code path (this site, the classes site, manual SQL) can double-b
 | Object | Purpose |
 |---|---|
 | `rb_tables` | Physical tables: seats, zone, shape, floor x/y (edited in admin Floor Plan) |
+| `rb_table_combos` | Push-together combinations (T1+T2 → 5, T3/T4/T5 pairs → 8, T3+T4+T5 → 12, T9+T10 → 8) |
 | `rb_reservations` | All bookings: `standard`, `experience`, `event_block`, `private` |
 | `rb_reservation_tables` | Table↔time assignments with the no-overlap constraint |
 | `rb_settings` | Hours, slot interval, durations, lead time, closures (edited in admin Settings) |
+
+## Automatic table assignment
+
+Venue layout mirrors the events/tickets page: Bar:4 · T1:2 · T2:2 · T3:4 · T4:4 · T5:4 ·
+T9:4 · T10:4, with combos T1+T2 (5 seats), T3/T4/T5 (any order), T9+T10.
+
+- **Dinner reservations** get the best single table (least leftover seats); parties too big
+  for one table get a combo — all member tables are held together.
+- **Experiences** follow the tickets-page roster rules: singles seat at the Bar first,
+  parties share tables' spare seats, and big groups span a combo. Physical tables are
+  claimed for the event as needed, so dinner reservations can never collide with them.
+- Combos are data (`rb_table_combos`) — change a combined capacity with one update.
 
 RPC functions (called by the pages): `rb_get_availability`, `rb_create_reservation`,
 `rb_cancel_reservation`, `rb_list_experiences`, `rb_book_experience`, `rb_block_event`,
