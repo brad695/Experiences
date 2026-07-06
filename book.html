@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reservations — Grey's</title>
+<style>
+  :root{
+    --bg:#faf7f2; --card:#ffffff; --ink:#2b2622; --muted:#8a8178;
+    --accent:#7d2e2e; --accent-ink:#fff; --line:#e8e1d6; --ok:#2e6b3f; --bad:#b3392f;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Georgia,'Times New Roman',serif;background:var(--bg);color:var(--ink)}
+  .wrap{max-width:760px;margin:0 auto;padding:24px 16px 80px}
+  header{text-align:center;padding:28px 0 8px}
+  header h1{font-size:34px;margin:0;letter-spacing:.5px}
+  header p{color:var(--muted);margin:6px 0 0;font-style:italic}
+  .tabs{display:flex;gap:8px;justify-content:center;margin:24px 0;flex-wrap:wrap}
+  .tabs button{font:inherit;font-size:15px;padding:10px 18px;border-radius:999px;border:1px solid var(--line);
+    background:var(--card);color:var(--ink);cursor:pointer}
+  .tabs button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:16px;
+    box-shadow:0 1px 3px rgba(60,40,20,.05)}
+  h2{font-size:20px;margin:0 0 14px}
+  label{display:block;font-size:13px;color:var(--muted);margin:14px 0 5px;text-transform:uppercase;letter-spacing:.08em}
+  input,textarea,select{font:inherit;font-size:16px;width:100%;padding:10px 12px;border:1px solid var(--line);
+    border-radius:8px;background:#fffdf9;color:var(--ink)}
+  textarea{resize:vertical;min-height:64px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:140px}
+  .party{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+  .party button,.slots button{font:inherit;padding:10px 0;min-width:46px;border-radius:8px;border:1px solid var(--line);
+    background:#fffdf9;cursor:pointer;color:var(--ink)}
+  .party button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px;margin-top:6px}
+  .slots button{padding:11px 4px}
+  .slots button:disabled{opacity:.35;cursor:not-allowed;text-decoration:line-through}
+  .slots button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn{font:inherit;font-size:16px;display:inline-block;background:var(--accent);color:#fff;border:none;
+    padding:13px 26px;border-radius:10px;cursor:pointer;margin-top:18px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  .note{color:var(--muted);font-size:14px;margin-top:10px}
+  .msg{padding:12px 14px;border-radius:8px;margin-top:14px;font-size:15px;display:none}
+  .msg.ok{display:block;background:#eef5ee;color:var(--ok);border:1px solid #cfe3cf}
+  .msg.bad{display:block;background:#faeceb;color:var(--bad);border:1px solid #ecccc8}
+  .confirm{ text-align:center;padding:10px 0}
+  .confirm .code{font-size:30px;letter-spacing:.25em;margin:10px 0;color:var(--accent);font-weight:bold}
+  .exp{display:flex;gap:16px;justify-content:space-between;align-items:flex-start;border-top:1px solid var(--line);padding:18px 0}
+  .exp:first-of-type{border-top:none;padding-top:4px}
+  .exp h3{margin:0 0 4px;font-size:18px}
+  .exp .meta{color:var(--muted);font-size:14px}
+  .exp .blurb{font-size:15px;margin:8px 0 0}
+  .exp .side{text-align:right;min-width:120px}
+  .exp .price{font-size:20px;font-weight:bold}
+  .exp .left{font-size:13px;color:var(--muted);margin:4px 0 10px}
+  .soldout{color:var(--bad);font-weight:bold;font-size:14px}
+  .modal-bg{position:fixed;inset:0;background:rgba(40,30,20,.45);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+  .modal-bg.open{display:flex}
+  .modal{background:var(--card);border-radius:var(--radius);max-width:480px;width:100%;padding:24px;max-height:92vh;overflow:auto}
+  .hidden{display:none}
+  .spin{color:var(--muted);font-style:italic}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Grey&rsquo;s</h1>
+    <p>Reservations &amp; Experiences — Memphis</p>
+  </header>
+
+  <div class="tabs">
+    <button id="tabBook" class="on" onclick="showTab('book')">Book a Table</button>
+    <button id="tabExp" onclick="showTab('exp')">Experiences</button>
+    <button id="tabManage" onclick="showTab('manage')">Manage Reservation</button>
+  </div>
+
+  <!-- ============ BOOK A TABLE ============ -->
+  <div id="paneBook">
+    <div class="card">
+      <h2>Reserve a table</h2>
+      <div class="row">
+        <div>
+          <label>Date</label>
+          <input type="date" id="bkDate">
+        </div>
+        <div>
+          <label>Party size</label>
+          <div class="party" id="bkParty"></div>
+        </div>
+      </div>
+      <label>Time</label>
+      <div id="bkSlots" class="slots"><span class="spin">Pick a date to see times…</span></div>
+      <div class="msg" id="bkSlotsMsg"></div>
+    </div>
+
+    <div class="card hidden" id="bkDetails">
+      <h2>Your details</h2>
+      <div class="row">
+        <div><label>Name</label><input id="bkName" autocomplete="name"></div>
+        <div><label>Email</label><input id="bkEmail" type="email" autocomplete="email"></div>
+      </div>
+      <div class="row">
+        <div><label>Phone</label><input id="bkPhone" type="tel" autocomplete="tel"></div>
+      </div>
+      <label>Notes (allergies, occasions…)</label>
+      <textarea id="bkNotes"></textarea>
+      <button class="btn" id="bkSubmit" onclick="submitBooking()">Confirm reservation</button>
+      <div class="msg" id="bkMsg"></div>
+    </div>
+
+    <div class="card hidden" id="bkDone">
+      <div class="confirm">
+        <h2>You&rsquo;re booked! 🥂</h2>
+        <p id="bkDoneWhen"></p>
+        <p>Your confirmation code:</p>
+        <div class="code" id="bkDoneCode"></div>
+        <p class="note">Save this code — you&rsquo;ll need it (with your email) to cancel or change your reservation.</p>
+        <button class="btn ghost" onclick="location.reload()">Make another reservation</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ EXPERIENCES ============ -->
+  <div id="paneExp" class="hidden">
+    <div class="card">
+      <h2>Upcoming experiences</h2>
+      <p class="note" style="margin-top:0">Ticketed evenings at the shop — seating is reserved for you automatically.</p>
+      <div id="expList"><span class="spin">Loading…</span></div>
+    </div>
+  </div>
+
+  <!-- ============ MANAGE ============ -->
+  <div id="paneManage" class="hidden">
+    <div class="card">
+      <h2>Cancel a reservation</h2>
+      <div class="row">
+        <div><label>Confirmation code</label><input id="mgCode" placeholder="e.g. 4F2A9C" style="text-transform:uppercase"></div>
+        <div><label>Email used to book</label><input id="mgEmail" type="email"></div>
+      </div>
+      <button class="btn" onclick="cancelBooking()">Cancel reservation</button>
+      <div class="msg" id="mgMsg"></div>
+      <p class="note">Need to change the time instead? Cancel and rebook, or give us a call.</p>
+    </div>
+  </div>
+</div>
+
+<!-- experience booking modal -->
+<div class="modal-bg" id="expModalBg" onclick="if(event.target===this)closeExpModal()">
+  <div class="modal">
+    <h2 id="exmTitle"></h2>
+    <p class="note" id="exmMeta" style="margin-top:-4px"></p>
+    <label>Seats</label>
+    <select id="exmQty"></select>
+    <div class="row">
+      <div><label>Name</label><input id="exmName"></div>
+      <div><label>Email</label><input id="exmEmail" type="email"></div>
+    </div>
+    <div class="row">
+      <div><label>Phone</label><input id="exmPhone" type="tel"></div>
+    </div>
+    <label>Notes</label>
+    <textarea id="exmNotes"></textarea>
+    <p class="note" id="exmTotal"></p>
+    <button class="btn" id="exmSubmit" onclick="submitExperience()">Reserve seats</button>
+    <button class="btn ghost" style="margin-left:8px" onclick="closeExpModal()">Close</button>
+    <div class="msg" id="exmMsg"></div>
+  </div>
+</div>
+
+<script>
+const SUPA_URL = 'https://vdvtrevhqalmjwhjhjug.supabase.co';
+const SUPA_KEY = 'sb_publishable_LnlevWReed7K8cFk_f_Mxg_UywktQ5_';
+
+async function rpc(fn, args){
+  const res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
+    method:'POST',
+    headers:{apikey:SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`, 'Content-Type':'application/json'},
+    body: JSON.stringify(args||{})
+  });
+  if(!res.ok){ throw new Error(`Request failed (${res.status})`); }
+  return res.json();
+}
+
+const $ = id => document.getElementById(id);
+const money = c => '$' + (c/100).toLocaleString(undefined,{minimumFractionDigits:2});
+const fmt12 = t => { const [h,m]=t.split(':').map(Number); const ap=h>=12?'PM':'AM'; return `${((h+11)%12)+1}:${String(m).padStart(2,'0')} ${ap}`; };
+const fmtDate = d => new Date(d+'T12:00:00').toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+
+function showTab(t){
+  for(const k of ['Book','Exp','Manage']){
+    $('pane'+k).classList.toggle('hidden', k.toLowerCase()!==t.replace('exp','Exp').toLowerCase() && k.toLowerCase()!==t);
+    $('tab'+k).classList.toggle('on', k.toLowerCase()===t);
+  }
+  if(t==='exp' && !expLoaded) loadExperiences();
+}
+
+/* ---------- book a table ---------- */
+let party = 2, pickedTime = null;
+
+function initBooking(){
+  const d = $('bkDate');
+  const today = new Date();
+  d.min = today.toISOString().slice(0,10);
+  const max = new Date(today); max.setDate(max.getDate()+60);
+  d.max = max.toISOString().slice(0,10);
+  d.value = d.min;
+  d.onchange = loadSlots;
+  const pp = $('bkParty');
+  for(let i=1;i<=8;i++){
+    const b=document.createElement('button');
+    b.textContent=i; if(i===party) b.classList.add('on');
+    b.onclick=()=>{ party=i; [...pp.children].forEach(c=>c.classList.toggle('on',+c.textContent===i)); loadSlots(); };
+    pp.appendChild(b);
+  }
+  loadSlots();
+}
+
+async function loadSlots(){
+  pickedTime=null; $('bkDetails').classList.add('hidden');
+  const box=$('bkSlots'); box.innerHTML='<span class="spin">Checking availability…</span>';
+  const m=$('bkSlotsMsg'); m.className='msg';
+  try{
+    const r = await rpc('rb_get_availability',{p_date:$('bkDate').value, p_party:party});
+    box.innerHTML='';
+    if(!r.ok){ m.className='msg bad'; m.textContent=r.error; return; }
+    if(r.closed || !r.slots.length){
+      box.innerHTML='<span class="spin">We’re closed this day — try another date.</span>'; return;
+    }
+    for(const s of r.slots){
+      const b=document.createElement('button');
+      b.textContent=fmt12(s.time); b.disabled=!s.available;
+      b.onclick=()=>{ pickedTime=s.time; [...box.children].forEach(c=>c.classList.remove('on')); b.classList.add('on');
+        $('bkDetails').classList.remove('hidden'); $('bkDetails').scrollIntoView({behavior:'smooth'}); };
+      box.appendChild(b);
+    }
+    if(!r.slots.some(s=>s.available))
+      box.insertAdjacentHTML('beforeend','<span class="spin" style="grid-column:1/-1">Fully booked — try another date or call us for the waitlist.</span>');
+  }catch(e){ box.innerHTML=''; m.className='msg bad'; m.textContent='Could not load availability. Please try again.'; }
+}
+
+async function submitBooking(){
+  const m=$('bkMsg'); m.className='msg';
+  if(!pickedTime) { m.className='msg bad'; m.textContent='Pick a time first.'; return; }
+  const btn=$('bkSubmit'); btn.disabled=true; btn.textContent='Booking…';
+  try{
+    const r = await rpc('rb_create_reservation',{
+      p_date:$('bkDate').value, p_time:pickedTime, p_party:party,
+      p_name:$('bkName').value, p_email:$('bkEmail').value,
+      p_phone:$('bkPhone').value, p_notes:$('bkNotes').value
+    });
+    if(!r.ok){ m.className='msg bad'; m.textContent=r.error; if(/just booked/i.test(r.error)) loadSlots(); return; }
+    $('paneBook').querySelectorAll('.card').forEach(c=>c.classList.add('hidden'));
+    $('bkDone').classList.remove('hidden');
+    $('bkDoneWhen').textContent=`${r.time} · party of ${party}`;
+    $('bkDoneCode').textContent=r.code;
+  }catch(e){ m.className='msg bad'; m.textContent='Something went wrong. Please try again.'; }
+  finally{ btn.disabled=false; btn.textContent='Confirm reservation'; }
+}
+
+/* ---------- experiences ---------- */
+let expLoaded=false, expItems=[], expCurrent=null;
+
+async function loadExperiences(){
+  expLoaded=true;
+  const box=$('expList');
+  try{
+    expItems = await rpc('rb_list_experiences');
+    if(!expItems.length){ box.innerHTML='<span class="spin">Nothing on the calendar right now — check back soon!</span>'; return; }
+    box.innerHTML = expItems.map((e,i)=>`
+      <div class="exp">
+        <div>
+          <h3>${esc(e.title)}</h3>
+          <div class="meta">${fmtDate(e.date)} · ${fmt12(e.time)} · ${e.location}</div>
+          ${e.blurb?`<p class="blurb">${esc(e.blurb)}</p>`:''}
+        </div>
+        <div class="side">
+          <div class="price">${money(e.price)}</div>
+          ${e.remaining>0
+            ? `<div class="left">${e.remaining} seat${e.remaining===1?'':'s'} left</div>
+               <button class="btn" style="margin-top:0;padding:9px 18px" onclick="openExpModal(${i})">Book</button>`
+            : `<div class="soldout">Sold out</div>`}
+        </div>
+      </div>`).join('');
+  }catch(e){ box.innerHTML='<span class="spin">Could not load experiences.</span>'; }
+}
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
+
+function openExpModal(i){
+  expCurrent=expItems[i];
+  $('exmTitle').textContent=expCurrent.title;
+  $('exmMeta').textContent=`${fmtDate(expCurrent.date)} · ${fmt12(expCurrent.time)} · ${money(expCurrent.price)} per person`;
+  const q=$('exmQty'); q.innerHTML='';
+  for(let n=1;n<=Math.min(expCurrent.remaining,8);n++) q.add(new Option(`${n} seat${n>1?'s':''}`,n));
+  q.onchange=updateExpTotal; updateExpTotal();
+  $('exmMsg').className='msg';
+  $('expModalBg').classList.add('open');
+}
+function updateExpTotal(){ $('exmTotal').textContent=`Total: ${money(expCurrent.price * +$('exmQty').value)} — payment is collected at the restaurant.`; }
+function closeExpModal(){ $('expModalBg').classList.remove('open'); }
+
+async function submitExperience(){
+  const m=$('exmMsg'); m.className='msg';
+  const btn=$('exmSubmit'); btn.disabled=true; btn.textContent='Booking…';
+  try{
+    const r = await rpc('rb_book_experience',{
+      p_event_id:expCurrent.id, p_qty:+$('exmQty').value,
+      p_name:$('exmName').value, p_email:$('exmEmail').value,
+      p_phone:$('exmPhone').value, p_notes:$('exmNotes').value
+    });
+    if(!r.ok){ m.className='msg bad'; m.textContent=r.error; return; }
+    m.className='msg ok';
+    m.textContent=`Booked! Confirmation code ${r.code}. Total ${money(r.total_cents)}${r.table_assigned?' — a table is reserved for your group.':''}`;
+    expLoaded=false; loadExperiences();
+  }catch(e){ m.className='msg bad'; m.textContent='Something went wrong. Please try again.'; }
+  finally{ btn.disabled=false; btn.textContent='Reserve seats'; }
+}
+
+/* ---------- manage ---------- */
+async function cancelBooking(){
+  const m=$('mgMsg'); m.className='msg';
+  try{
+    const r = await rpc('rb_cancel_reservation',{p_code:$('mgCode').value, p_email:$('mgEmail').value});
+    if(!r.ok){ m.className='msg bad'; m.textContent=r.error; return; }
+    m.className='msg ok'; m.textContent='Your reservation has been cancelled. We hope to see you another time!';
+  }catch(e){ m.className='msg bad'; m.textContent='Something went wrong. Please try again.'; }
+}
+
+initBooking();
+</script>
+</body>
+</html>
