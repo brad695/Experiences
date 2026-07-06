@@ -305,7 +305,7 @@ async function loadExperiences(){
         </div>
         <div class="side">
           <div class="price">${money(e.price_cents)}</div>
-          <div class="left">per person</div>
+          <div class="left">${e.per_person?'per person':'for your table'}</div>
           <button class="btn" style="margin-top:0;padding:9px 18px" onclick="openExpModal(${i})">Book</button>
         </div>
       </div>`).join('');
@@ -317,7 +317,7 @@ function esc(s){ const d=document.createElement('div'); d.textContent=s??''; ret
 function openExpModal(i){
   expCurrent=expTypes[i]; expPickedTime=null;
   $('exmTitle').textContent=expCurrent.name;
-  $('exmMeta').textContent=`${money(expCurrent.price_cents)} per person · ${expCurrent.duration_min} minutes`;
+  $('exmMeta').textContent=`${money(expCurrent.price_cents)} ${expCurrent.per_person?'per person':'flat'} · ${expCurrent.duration_min} minutes`;
   const d=$('exmDate');
   const today=new Date();
   d.min=today.toISOString().slice(0,10);
@@ -354,7 +354,8 @@ async function loadExpSlots(){
   }catch(e){ box.innerHTML='<span class="spin">Could not load availability.</span>'; }
 }
 function updateExpTotal(){
-  $('exmTotal').textContent=`Total: ${money(expCurrent.price_cents * +$('exmParty').value)} — payment is collected at the restaurant.`;
+  const total=expCurrent.per_person? expCurrent.price_cents * +$('exmParty').value : expCurrent.price_cents;
+  $('exmTotal').textContent=`Total: ${money(total)} — payment is collected at the restaurant.`;
 }
 function closeExpModal(){ $('expModalBg').classList.remove('open'); }
 
