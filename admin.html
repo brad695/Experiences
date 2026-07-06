@@ -98,7 +98,20 @@
   <input id="lgPassword" type="password" autocomplete="current-password"
     onkeydown="if(event.key==='Enter')signIn()">
   <button class="btn" id="lgBtn" style="margin-top:14px" onclick="signIn()">Sign in</button>
+  <p style="margin:12px 0 0"><a class="muted" style="cursor:pointer;text-decoration:underline;font-size:13px"
+    onclick="forgotPassword()">Forgot password?</a></p>
   <div class="msg" id="lgMsg"></div>
+</div>
+
+<div id="reset" class="card hidden" style="max-width:400px;margin:80px auto">
+  <h2 style="font-family:Georgia,serif;font-size:20px">Set a new password</h2>
+  <label>New password</label>
+  <input id="rpPass1" type="password" autocomplete="new-password">
+  <label>Confirm new password</label>
+  <input id="rpPass2" type="password" autocomplete="new-password"
+    onkeydown="if(event.key==='Enter')setNewPassword()">
+  <button class="btn" id="rpBtn" style="margin-top:14px" onclick="setNewPassword()">Update password</button>
+  <div class="msg" id="rpMsg"></div>
 </div>
 
 <div id="app" class="hidden">
@@ -318,10 +331,42 @@ async function signIn(){
 async function signOut(){ await sb.auth.signOut(); location.reload(); }
 
 let entered=false;
-sb.auth.onAuthStateChange((_ev,session)=>{
+// arriving from a password-reset email: show the new-password form instead of the app
+let recovering=/type=recovery/.test(location.hash);
+if(recovering){ $('login').classList.add('hidden'); $('reset').classList.remove('hidden'); }
+sb.auth.onAuthStateChange((ev,session)=>{
   // never await supabase calls inside this callback (auth lock deadlock)
-  if(session && !entered){ entered=true; setTimeout(()=>enterApp(session),0); }
+  if(ev==='PASSWORD_RECOVERY'){
+    recovering=true;
+    $('login').classList.add('hidden'); $('reset').classList.remove('hidden');
+    return;
+  }
+  if(session && !entered && !recovering){ entered=true; setTimeout(()=>enterApp(session),0); }
 });
+
+async function forgotPassword(){
+  const m=$('lgMsg'); m.className='msg';
+  const email=$('lgEmail').value.trim();
+  if(!email){ m.className='msg bad'; m.textContent='Type your email above first, then click "Forgot password?".'; return; }
+  const {error}=await sb.auth.resetPasswordForEmail(email,{redirectTo:location.origin+location.pathname});
+  if(error){ m.className='msg bad'; m.textContent=error.message; return; }
+  m.className='msg ok'; m.textContent='Reset email sent — open the link in it to choose a new password.';
+}
+
+async function setNewPassword(){
+  const m=$('rpMsg'); m.className='msg';
+  const p1=$('rpPass1').value, p2=$('rpPass2').value;
+  if(p1.length<8){ m.className='msg bad'; m.textContent='Use at least 8 characters.'; return; }
+  if(p1!==p2){ m.className='msg bad'; m.textContent='Passwords don’t match.'; return; }
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session){ m.className='msg bad'; m.textContent='This reset link has expired — request a new one from the sign-in page.'; return; }
+  const btn=$('rpBtn'); btn.disabled=true; btn.textContent='Saving…';
+  const {error}=await sb.auth.updateUser({password:p1});
+  btn.disabled=false; btn.textContent='Update password';
+  if(error){ m.className='msg bad'; m.textContent=error.message; return; }
+  recovering=false; $('reset').classList.add('hidden');
+  if(!entered){ entered=true; enterApp(session); }
+}
 async function enterApp(session){
   const {data:isAdmin}=await sb.rpc('rb_is_admin');
   if(!isAdmin){
