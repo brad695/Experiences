@@ -80,6 +80,12 @@
   <div id="paneBook">
     <div class="card">
       <h2>Reserve a table</h2>
+      <div class="row" id="bkLocRow" style="display:none">
+        <div>
+          <label>Location</label>
+          <select id="bkLoc"></select>
+        </div>
+      </div>
       <div class="row">
         <div>
           <label>Date</label>
@@ -151,8 +157,14 @@
   <div class="modal">
     <h2 id="exmTitle"></h2>
     <p class="note" id="exmMeta" style="margin-top:-4px"></p>
-    <label>Seats</label>
-    <select id="exmQty"></select>
+    <div id="exmModeRow" class="hidden">
+      <label>How would you like to book?</label>
+      <select id="exmMode"></select>
+    </div>
+    <div id="exmQtyRow">
+      <label>Seats</label>
+      <select id="exmQty"></select>
+    </div>
     <div class="row">
       <div><label>Name</label><input id="exmName"></div>
       <div><label>Email</label><input id="exmEmail" type="email"></div>
@@ -197,18 +209,33 @@ function showTab(t){
 }
 
 /* ---------- book a table ---------- */
-let party = 2, pickedTime = null;
+let party = 2, pickedTime = null, SETTINGS = {};
 
-function initBooking(){
+async function initBooking(){
+  try{
+    const res = await fetch(`${SUPA_URL}/rest/v1/rb_settings?id=eq.1&select=data`,
+      {headers:{apikey:SUPA_KEY, Authorization:`Bearer ${SUPA_KEY}`}});
+    SETTINGS = (await res.json())[0]?.data || {};
+  }catch(e){ SETTINGS = {}; }
+
+  const locs = SETTINGS.locations || [SETTINGS.location || 'Memphis'];
+  if(locs.length > 1){
+    $('bkLocRow').style.display='flex';
+    $('bkLoc').innerHTML = locs.map(l=>`<option ${l===(SETTINGS.location||locs[0])?'selected':''}>${esc(l)}</option>`).join('');
+    $('bkLoc').onchange = loadSlots;
+  }
+
   const d = $('bkDate');
   const today = new Date();
   d.min = today.toISOString().slice(0,10);
-  const max = new Date(today); max.setDate(max.getDate()+60);
+  const max = new Date(today); max.setDate(max.getDate()+(SETTINGS.horizon_days||60));
   d.max = max.toISOString().slice(0,10);
   d.value = d.min;
   d.onchange = loadSlots;
   const pp = $('bkParty');
-  for(let i=1;i<=8;i++){
+  const maxParty = SETTINGS.max_party_online || 8;
+  if(party > maxParty) party = maxParty;
+  for(let i=1;i<=maxParty;i++){
     const b=document.createElement('button');
     b.textContent=i; if(i===party) b.classList.add('on');
     b.onclick=()=>{ party=i; [...pp.children].forEach(c=>c.classList.toggle('on',+c.textContent===i)); loadSlots(); };
@@ -216,13 +243,14 @@ function initBooking(){
   }
   loadSlots();
 }
+function pickedLoc(){ return $('bkLocRow').style.display!=='none' ? $('bkLoc').value : (SETTINGS.location||'Memphis'); }
 
 async function loadSlots(){
   pickedTime=null; $('bkDetails').classList.add('hidden');
   const box=$('bkSlots'); box.innerHTML='<span class="spin">Checking availability…</span>';
   const m=$('bkSlotsMsg'); m.className='msg';
   try{
-    const r = await rpc('rb_get_availability',{p_date:$('bkDate').value, p_party:party});
+    const r = await rpc('rb_get_availability',{p_date:$('bkDate').value, p_party:party, p_location:pickedLoc()});
     box.innerHTML='';
     if(!r.ok){ m.className='msg bad'; m.textContent=r.error; return; }
     if(r.closed || !r.slots.length){
@@ -248,7 +276,7 @@ async function submitBooking(){
     const r = await rpc('rb_create_reservation',{
       p_date:$('bkDate').value, p_time:pickedTime, p_party:party,
       p_name:$('bkName').value, p_email:$('bkEmail').value,
-      p_phone:$('bkPhone').value, p_notes:$('bkNotes').value
+      p_phone:$('bkPhone').value, p_notes:$('bkNotes').value, p_location:pickedLoc()
     });
     if(!r.ok){ m.className='msg bad'; m.textContent=r.error; if(/just booked/i.test(r.error)) loadSlots(); return; }
     $('paneBook').querySelectorAll('.card').forEach(c=>c.classList.add('hidden'));
@@ -291,14 +319,41 @@ function esc(s){ const d=document.createElement('div'); d.textContent=s??''; ret
 function openExpModal(i){
   expCurrent=expItems[i];
   $('exmTitle').textContent=expCurrent.title;
-  $('exmMeta').textContent=`${fmtDate(expCurrent.date)} · ${fmt12(expCurrent.time)} · ${money(expCurrent.price)} per person`;
+  $('exmMeta').textContent=`${fmtDate(expCurrent.date)} · ${fmt12(expCurrent.time)} · ${money(expCurrent.price)} per person · ${expCurrent.location}`;
+  const modes=expCurrent.sale_modes||['individual'];
+  const tableSize=expCurrent.party_size||1;
+  const tableOk=(modes.includes('table')) && tableSize>1 && expCurrent.remaining>=tableSize;
+  const seatsOk=modes.includes('individual')||modes.includes('split')||!tableOk;
+  const ms=$('exmMode'); ms.innerHTML='';
+  if(tableOk && seatsOk){
+    ms.add(new Option(`Individual seats — ${money(expCurrent.price)} each`,'seats'));
+    ms.add(new Option(`Whole table for ${tableSize} — ${money(expCurrent.price*tableSize)}`,'table'));
+    $('exmModeRow').classList.remove('hidden');
+  }else if(tableOk){
+    ms.add(new Option(`Whole table for ${tableSize} — ${money(expCurrent.price*tableSize)}`,'table'));
+    $('exmModeRow').classList.remove('hidden');
+  }else{
+    $('exmModeRow').classList.add('hidden');
+  }
+  ms.onchange=syncExpMode;
   const q=$('exmQty'); q.innerHTML='';
   for(let n=1;n<=Math.min(expCurrent.remaining,8);n++) q.add(new Option(`${n} seat${n>1?'s':''}`,n));
-  q.onchange=updateExpTotal; updateExpTotal();
+  q.onchange=updateExpTotal;
+  syncExpMode();
   $('exmMsg').className='msg';
   $('expModalBg').classList.add('open');
 }
-function updateExpTotal(){ $('exmTotal').textContent=`Total: ${money(expCurrent.price * +$('exmQty').value)} — payment is collected at the restaurant.`; }
+function expMode(){ return $('exmModeRow').classList.contains('hidden')?'seats':$('exmMode').value; }
+function syncExpMode(){
+  $('exmQtyRow').classList.toggle('hidden', expMode()==='table');
+  updateExpTotal();
+}
+function expQty(){ return expMode()==='table'? (expCurrent.party_size||1) : +$('exmQty').value; }
+function updateExpTotal(){
+  $('exmTotal').textContent=`Total: ${money(expCurrent.price * expQty())}`
+    + (expMode()==='table'? ` — a table for ${expCurrent.party_size} is yours for the night.` : '')
+    + ' Payment is collected at the restaurant.';
+}
 function closeExpModal(){ $('expModalBg').classList.remove('open'); }
 
 async function submitExperience(){
@@ -306,9 +361,10 @@ async function submitExperience(){
   const btn=$('exmSubmit'); btn.disabled=true; btn.textContent='Booking…';
   try{
     const r = await rpc('rb_book_experience',{
-      p_event_id:expCurrent.id, p_qty:+$('exmQty').value,
+      p_event_id:expCurrent.id, p_qty:expQty(),
       p_name:$('exmName').value, p_email:$('exmEmail').value,
-      p_phone:$('exmPhone').value, p_notes:$('exmNotes').value
+      p_phone:$('exmPhone').value, p_notes:$('exmNotes').value,
+      p_own_table:expMode()==='table'
     });
     if(!r.ok){ m.className='msg bad'; m.textContent=r.error; return; }
     m.className='msg ok';

@@ -117,6 +117,7 @@
 <div id="app" class="hidden">
   <div class="top">
     <h1>Grey&rsquo;s · Host</h1>
+    <select id="locSel" style="width:auto;padding:6px 8px" onchange="setLocation(this.value)"></select>
     <nav>
       <button id="navday" class="on" onclick="nav('day')">Day</button>
       <button id="navmonth" onclick="nav('month')">Calendar</button>
@@ -193,7 +194,6 @@
             </select>
           </div>
           <div><label>Date</label><input type="date" id="floorDate" onchange="loadFloorDay()"></div>
-          <div><label>Time</label><input type="time" id="floorTime" value="18:00" onchange="renderFloor()"></div>
           <div id="floorEditBtns" class="hidden" style="flex:2;text-align:right">
             <button class="btn ghost" onclick="addTable()">+ Add table</button>
             <button class="btn" onclick="saveLayout()">Save layout</button>
@@ -245,6 +245,8 @@
         </div>
         <h3>Seating hours <span class="muted" style="font-weight:normal">— first to last seating, e.g. <code>17:00-21:00</code>; separate two windows with a comma; blank = closed</span></h3>
         <div id="stHours"></div>
+        <h3>Locations <span class="muted" style="font-weight:normal">— comma separated; first with a floor plan takes bookings</span></h3>
+        <input id="stLocations">
         <h3>Closures <span class="muted" style="font-weight:normal">— dates YYYY-MM-DD, one per line</span></h3>
         <textarea id="stClosures" rows="3"></textarea>
         <br><button class="btn" style="margin-top:14px" onclick="saveSettings()">Save settings</button>
@@ -297,7 +299,13 @@ const $=id=>document.getElementById(id);
 const esc=s=>{const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;};
 const money=c=>'$'+((c||0)/100).toLocaleString(undefined,{minimumFractionDigits:2});
 
-let SETTINGS=null, TZ='America/Chicago', TABLES=[], dayData={res:[],events:[]}, floorRes=[], selTableId=null, dragging=null;
+let SETTINGS=null, TZ='America/Chicago', LOC='Memphis', TABLES=[], dayData={res:[],events:[]}, floorRes=[], selTableId=null, dragging=null;
+const locTables=()=>TABLES.filter(t=>t.location===LOC);
+function setLocation(l){
+  LOC=l; selTableId=null;
+  loadDay();
+  if(!$('pane-floor').classList.contains('hidden')) loadFloorDay();
+}
 
 /* ---------------- time helpers ---------------- */
 function zonedToUtc(dateStr,timeStr){
@@ -387,6 +395,8 @@ async function boot(){
     sb.from('rb_tables').select('*').order('sort_order')
   ]);
   SETTINGS=st.data; TZ=SETTINGS.timezone||TZ; TABLES=tbl||[];
+  LOC=SETTINGS.location||'Memphis';
+  $('locSel').innerHTML=(SETTINGS.locations||[LOC]).map(l=>`<option ${l===LOC?'selected':''}>${esc(l)}</option>`).join('');
   $('dayDate').value=todayStr(); $('floorDate').value=todayStr();
   monthCursor=todayStr().slice(0,7);
   loadDay(); fillSettingsForm();
@@ -410,7 +420,8 @@ async function loadDay(){
   const start=zonedToUtc(dateStr,'00:00'), end=new Date(start.getTime()+864e5);
   const [{data:res},{data:evs}]=await Promise.all([
     sb.from('rb_reservations').select('*, rb_reservation_tables(table_id,active)')
-      .gte('starts_at',start.toISOString()).lt('starts_at',end.toISOString()).order('starts_at'),
+      .gte('starts_at',start.toISOString()).lt('starts_at',end.toISOString())
+      .eq('location',LOC).order('starts_at'),
     sb.from('events').select('*').eq('date',dateStr)
   ]);
   dayData={res:res||[],events:evs||[],start};
@@ -422,22 +433,29 @@ function renderDayEvents(){
   if(!dayData.events.length){ box.innerHTML=''; return; }
   box.innerHTML='<h3>Events &amp; classes this day</h3>'+dayData.events.map(e=>{
     const blocked=dayData.res.some(r=>r.kind==='event_block'&&r.event_id===e.id&&!['cancelled'].includes(r.status));
-    const here=e.location===(SETTINGS.location||'Memphis');
+    const here=e.location===LOC;
     return `<div class="row" style="align-items:center;border-top:1px solid var(--line);padding:8px 0;margin:0">
       <div style="flex:3"><b>${esc(e.title)}</b>
         <span class="muted">· ${e.time} · ${e.duration_min} min · ${esc(e.location)} · ${esc(e.kind)}</span></div>
       <div style="flex:1;text-align:right">
         ${here ? (blocked
-          ? '<span class="pill event_block">tables blocked</span>'
+          ? `<span class="pill event_block">tables blocked</span>
+             <button class="btn small gray" onclick="unblockEvent('${e.id}')">Unblock</button>`
           : `<button class="btn small" onclick="blockEvent('${e.id}')">Block all tables</button>`)
-          : '<span class="muted">other location</span>'}
+          : `<span class="muted">at ${esc(e.location)}</span>`}
       </div></div>`;
   }).join('');
 }
 
 async function blockEvent(id){
-  if(!confirm('Block all active tables for this event? Existing reservations are kept.')) return;
+  if(!confirm('Block all free tables for this event? Existing reservations are kept.')) return;
   const {data,error}=await sb.rpc('rb_block_event',{p_event_id:id});
+  if(error||!data.ok) alert('Failed: '+(error?.message||data.error));
+  loadDay();
+}
+async function unblockEvent(id){
+  if(!confirm('Release this event\'s table block? Tables with seated event guests stay held; the rest reopen for reservations.')) return;
+  const {data,error}=await sb.rpc('rb_unblock_event',{p_event_id:id});
   if(error||!data.ok) alert('Failed: '+(error?.message||data.error));
   loadDay();
 }
@@ -453,7 +471,7 @@ function renderTimeline(){
   g.innerHTML=hh+'</div>';
   const active=dayData.res.filter(r=>!['cancelled','no_show'].includes(r.status));
   $('dayCount').textContent=`— ${active.filter(r=>r.kind!=='event_block').length} reservations`;
-  const rows=[...TABLES.filter(t=>t.active).map(t=>({id:t.id,label:t.name})),{id:null,label:'Unassigned'}];
+  const rows=[...locTables().filter(t=>t.active).map(t=>({id:t.id,label:t.name})),{id:null,label:'Unassigned'}];
   for(const row of rows){
     const items=active.filter(r=>{
       if(r.kind==='experience') return row.id? r.assigned_table_id===row.id : !r.assigned_table_id;
@@ -505,7 +523,7 @@ async function openRes(id){
   const tids=r.kind==='experience'
     ? (r.assigned_table_id? [r.assigned_table_id] : [])
     : (r.rb_reservation_tables||[]).filter(a=>a.active).map(a=>a.table_id);
-  const opts=['<option value="">— none —</option>',...TABLES.filter(t=>t.active).map(t=>
+  const opts=['<option value="">— none —</option>',...TABLES.filter(t=>t.active&&t.location===(r.location||LOC)).map(t=>
     `<option value="${t.id}" ${tids.includes(t.id)?'selected':''}>${esc(t.name)} (${t.seats_min}–${t.seats_max})</option>`)].join('');
   $('rdBody').innerHTML=`
     <h2>${esc(r.guest_name||'(no name)')} <span class="pill ${r.kind}">${r.kind.replace('_',' ')}</span></h2>
@@ -562,7 +580,7 @@ async function saveRes(id){
 function openNewRes(){
   $('nrDate').value=$('dayDate').value; $('nrMsg').className='msg';
   $('nrTable').innerHTML='<option value="auto">Auto-assign (uses combos)</option><option value="">No table</option>'+
-    TABLES.filter(t=>t.active)
+    locTables().filter(t=>t.active)
     .map(t=>`<option value="${t.id}">${esc(t.name)} (seats ${t.seats_max})</option>`).join('');
   $('nrBg').classList.add('open');
 }
@@ -574,7 +592,7 @@ async function createManualRes(){
     p_name:$('nrName').value.trim(), p_email:$('nrEmail').value.trim(),
     p_phone:$('nrPhone').value.trim(), p_notes:$('nrNotes').value,
     p_kind:$('nrKind').value, p_duration_min:+$('nrDur').value||null,
-    p_table_id:(sel==='auto'||sel==='')?null:sel, p_auto:sel==='auto'
+    p_table_id:(sel==='auto'||sel==='')?null:sel, p_auto:sel==='auto', p_location:LOC
   });
   if(error||!data.ok){m.className='msg bad';m.textContent=error?.message||data.error;return;}
   closeModal('nrBg'); $('dayDate').value=$('nrDate').value; loadDay();
@@ -626,6 +644,7 @@ async function loadFloorDay(){
   const start=zonedToUtc(dateStr,'00:00'), end=new Date(start.getTime()+864e5);
   const {data}=await sb.from('rb_reservations').select('id,guest_name,party_size,status,kind,event_id,assigned_table_id,starts_at,ends_at, rb_reservation_tables(table_id,active)')
     .gte('starts_at',start.toISOString()).lt('starts_at',end.toISOString())
+    .eq('location',LOC)
     .not('status','in','("cancelled","no_show")');
   floorRes=data||[]; renderFloor();
 }
@@ -633,21 +652,23 @@ function resOnTable(r,tableId){
   if(r.kind==='experience') return r.assigned_table_id===tableId;
   return (r.rb_reservation_tables||[]).some(a=>a.active&&a.table_id===tableId);
 }
-function floorInstant(){ return zonedToUtc($('floorDate').value||todayStr(), $('floorTime').value||'18:00'); }
+function floorIsToday(){ return ($('floorDate').value||todayStr())===todayStr(); }
 
 function renderFloor(){
   const edit=$('floorMode').value==='edit';
   $('floorEditBtns').classList.toggle('hidden',!edit);
-  const at=floorInstant().getTime();
+  const now=Date.now(), today=floorIsToday();
   const svg=$('floorSvg'); svg.innerHTML='';
-  for(const t of TABLES){
-    const onNow=!edit? floorRes.filter(r=>resOnTable(r,t.id) &&
-      new Date(r.starts_at).getTime()<=at && at<new Date(r.ends_at).getTime()) : [];
-    // prefer showing the guest over the event block holding the table
+  for(const t of locTables()){
+    const dayList=!edit? floorRes.filter(r=>resOnTable(r,t.id)) : [];
+    // today: live occupancy right now; other days: how many bookings the table has
+    const onNow=today? dayList.filter(r=>new Date(r.starts_at).getTime()<=now && now<new Date(r.ends_at).getTime()) : [];
     const busyRes=onNow.find(r=>r.kind!=='event_block')||onNow[0]||null;
-    let cls='tbl-free';
+    const guestCount=dayList.filter(r=>r.kind!=='event_block').length;
+    let cls='tbl-free', sub=t.seats_min+'–'+t.seats_max;
     if(!t.active) cls='tbl-off';
-    else if(busyRes) cls=busyRes.status==='seated'?'tbl-seated':'tbl-busy';
+    else if(today && busyRes){ cls=busyRes.status==='seated'?'tbl-seated':'tbl-busy'; sub=busyRes.guest_name||'busy'; }
+    else if(!today && dayList.length){ cls='tbl-busy'; sub=guestCount?`${guestCount} res`:'event hold'; }
     const sel=t.id===selTableId?' tbl-sel':'';
     const g=document.createElementNS('http://www.w3.org/2000/svg','g');
     g.dataset.id=t.id;
@@ -656,7 +677,7 @@ function renderFloor(){
       : `<rect class="tbl-shape ${cls}${sel}" x="${t.x}" y="${t.y}" width="${t.w}" height="${t.h}" rx="8"/>`;
     g.innerHTML=`${shape}
       <text class="tbl-name" x="${+t.x + t.w/2}" y="${+t.y + t.h/2 - 2}" text-anchor="middle">${esc(t.name)}</text>
-      <text class="tbl-cap" x="${+t.x + t.w/2}" y="${+t.y + t.h/2 + 12}" text-anchor="middle">${busyRes?esc(busyRes.guest_name||'busy'):(t.seats_min+'–'+t.seats_max)}</text>`;
+      <text class="tbl-cap" x="${+t.x + t.w/2}" y="${+t.y + t.h/2 + 12}" text-anchor="middle">${esc(sub)}</text>`;
     g.addEventListener('pointerdown',ev=>onTableDown(ev,t));
     svg.appendChild(g);
   }
@@ -710,13 +731,15 @@ function renderFloorSide(){
       </div>
       <p class="muted" style="font-size:11px">Drag tables to arrange the room. “Save layout” writes everything.</p>`;
   }else{
-    const at=floorInstant().getTime();
+    const now=Date.now(), today=floorIsToday();
     const list=floorRes.filter(r=>resOnTable(r,t.id))
       .sort((a,b)=>a.starts_at<b.starts_at?-1:1);
     box.innerHTML=`<h3 style="margin-top:0">${esc(t.name)} <span class="muted">(${t.seats_min}–${t.seats_max} seats · ${esc(t.zone)})</span></h3>`+
-      (list.length? list.map(r=>`<div style="border-top:1px solid var(--line);padding:7px 0" class="${new Date(r.starts_at)<=at&&at<new Date(r.ends_at)?'':'muted'}">
+      (list.length? list.map(r=>{
+          const past=today && new Date(r.ends_at).getTime()<now;
+          return `<div style="border-top:1px solid var(--line);padding:7px 0" class="${past?'muted':''}">
           <b>${fmtT(r.starts_at)}–${fmtT(r.ends_at)}</b> ${esc(r.guest_name)} (${r.party_size})
-          <span class="pill ${r.kind}">${r.kind.replace('_',' ')}</span></div>`).join('')
+          <span class="pill ${r.kind}">${r.kind.replace('_',' ')}</span></div>`;}).join('')
         : '<p class="muted">No bookings this day.</p>');
   }
 }
@@ -729,7 +752,7 @@ function applyTableEdit(){
 async function addTable(){
   const {data,error}=await sb.from('rb_tables').insert({
     name:'NEW'+(TABLES.length+1), seats_min:1, seats_max:2, x:300, y:200, w:80, h:60,
-    sort_order:TABLES.length+1
+    sort_order:TABLES.length+1, location:LOC
   }).select().single();
   if(error){ showFloorMsg(error.message,true); return; }
   TABLES.push(data); selTableId=data.id; renderFloor();
@@ -742,7 +765,7 @@ async function deleteTable(){
   TABLES=TABLES.filter(x=>x.id!==t.id); selTableId=null; renderFloor();
 }
 async function saveLayout(){
-  for(const t of TABLES){
+  for(const t of locTables()){
     const {error}=await sb.from('rb_tables').update({
       name:t.name,seats_min:t.seats_min,seats_max:t.seats_max,zone:t.zone,shape:t.shape,
       x:t.x,y:t.y,w:t.w,h:t.h,active:t.active}).eq('id',t.id);
@@ -785,6 +808,7 @@ function fillSettingsForm(){
       <div><input id="stH${i}" value="${wins}" placeholder="closed"></div></div>`;
   }).join('');
   $('stClosures').value=(s.closures||[]).join('\n');
+  $('stLocations').value=(s.locations||['Memphis','Nashville','Franklin']).join(', ');
 }
 async function saveSettings(){
   const m=$('stMsg'); m.className='msg';
@@ -801,7 +825,9 @@ async function saveSettings(){
     hours[String(i)]=wins;
   }
   const closures=$('stClosures').value.split(/[\n,]+/).map(x=>x.trim()).filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x));
-  const data={...SETTINGS,
+  const locations=$('stLocations').value.split(',').map(x=>x.trim()).filter(Boolean);
+  if(!locations.length){ m.className='msg bad'; m.textContent='At least one location is required.'; return; }
+  const data={...SETTINGS, locations,
     slot_interval_min:+$('stInterval').value, lead_time_min:+$('stLead').value,
     horizon_days:+$('stHorizon').value, max_party_online:+$('stMaxParty').value,
     durations:[{max_party:2,minutes:+$('stDur2').value},{max_party:4,minutes:+$('stDur4').value},{max_party:99,minutes:+$('stDurBig').value}],
@@ -809,6 +835,8 @@ async function saveSettings(){
   const {error}=await sb.from('rb_settings').update({data,updated_at:new Date().toISOString()}).eq('id',1);
   if(error){ m.className='msg bad'; m.textContent=error.message; return; }
   SETTINGS=data; m.className='msg ok'; m.textContent='Settings saved.';
+  if(!SETTINGS.locations.includes(LOC)) LOC=SETTINGS.locations[0];
+  $('locSel').innerHTML=SETTINGS.locations.map(l=>`<option ${l===LOC?'selected':''}>${esc(l)}</option>`).join('');
 }
 </script>
 </body>
