@@ -299,7 +299,12 @@ const $=id=>document.getElementById(id);
 const esc=s=>{const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;};
 const money=c=>'$'+((c||0)/100).toLocaleString(undefined,{minimumFractionDigits:2});
 
-let SETTINGS=null, TZ='America/Chicago', LOC='Memphis', TABLES=[], dayData={res:[],events:[]}, floorRes=[], selTableId=null, dragging=null;
+let SETTINGS=null, TZ='America/Chicago', LOC='Memphis', TABLES=[], COMBOS=[], dayData={res:[],events:[]}, floorRes=[], selTableId=null, dragging=null;
+const comboById=id=>COMBOS.find(c=>c.id===id);
+function expOnTable(r,tableId){
+  if(r.assigned_combo_id){ const c=comboById(r.assigned_combo_id); return !!c&&c.table_ids.includes(tableId); }
+  return r.assigned_table_id===tableId;
+}
 const locTables=()=>TABLES.filter(t=>t.location===LOC);
 function setLocation(l){
   LOC=l; selTableId=null;
@@ -390,11 +395,12 @@ async function enterApp(session){
 
 /* ---------------- boot / nav ---------------- */
 async function boot(){
-  const [{data:st},{data:tbl}]=await Promise.all([
+  const [{data:st},{data:tbl},{data:cmb}]=await Promise.all([
     sb.from('rb_settings').select('data').eq('id',1).single(),
-    sb.from('rb_tables').select('*').order('sort_order')
+    sb.from('rb_tables').select('*').order('sort_order'),
+    sb.from('rb_table_combos').select('*')
   ]);
-  SETTINGS=st.data; TZ=SETTINGS.timezone||TZ; TABLES=tbl||[];
+  SETTINGS=st.data; TZ=SETTINGS.timezone||TZ; TABLES=tbl||[]; COMBOS=cmb||[];
   LOC=SETTINGS.location||'Memphis';
   $('locSel').innerHTML=(SETTINGS.locations||[LOC]).map(l=>`<option ${l===LOC?'selected':''}>${esc(l)}</option>`).join('');
   $('dayDate').value=todayStr(); $('floorDate').value=todayStr();
@@ -474,12 +480,12 @@ function renderTimeline(){
   const rows=[...locTables().filter(t=>t.active).map(t=>({id:t.id,label:t.name})),{id:null,label:'Unassigned'}];
   for(const row of rows){
     const items=active.filter(r=>{
-      if(r.kind==='experience') return row.id? r.assigned_table_id===row.id : !r.assigned_table_id;
+      if(r.kind==='experience') return row.id? expOnTable(r,row.id) : (!r.assigned_table_id&&!r.assigned_combo_id);
       const tids=(r.rb_reservation_tables||[]).filter(a=>a.active).map(a=>a.table_id);
       if(r.kind==='event_block'){
         // hide the block bar where a guest is already shown on that table
         return row.id? tids.includes(row.id) &&
-          !active.some(x=>x.kind==='experience'&&x.event_id===r.event_id&&x.assigned_table_id===row.id) : false;
+          !active.some(x=>x.kind==='experience'&&x.event_id===r.event_id&&expOnTable(x,row.id)) : false;
       }
       return row.id? tids.includes(row.id) : tids.length===0;
     });
@@ -498,7 +504,10 @@ function renderTimeline(){
 }
 
 function resTableNames(r){
-  if(r.kind==='experience') return r.assigned_table_id? tableName(r.assigned_table_id) : '';
+  if(r.kind==='experience'){
+    if(r.assigned_combo_id) return (comboById(r.assigned_combo_id)||{}).name||'';
+    return r.assigned_table_id? tableName(r.assigned_table_id) : '';
+  }
   return (r.rb_reservation_tables||[]).filter(a=>a.active).map(a=>tableName(a.table_id)).join('+');
 }
 function renderDayList(){
@@ -553,7 +562,8 @@ async function saveRes(id){
   if(e1){m.className='msg bad';m.textContent=e1.message;return;}
   if(r.kind==='experience'){
     // experiences share event tables: just move the seat-chart assignment
-    const {error:e3}=await sb.from('rb_reservations').update({assigned_table_id:tid||null}).eq('id',id);
+    const {error:e3}=await sb.from('rb_reservations')
+      .update({assigned_table_id:tid||null, assigned_combo_id:null}).eq('id',id);
     if(e3){m.className='msg bad';m.textContent=e3.message;return;}
     closeModal('rdBg'); loadDay(); return;
   }
@@ -642,14 +652,14 @@ async function loadMonth(){
 async function loadFloorDay(){
   const dateStr=$('floorDate').value||todayStr();
   const start=zonedToUtc(dateStr,'00:00'), end=new Date(start.getTime()+864e5);
-  const {data}=await sb.from('rb_reservations').select('id,guest_name,party_size,status,kind,event_id,assigned_table_id,starts_at,ends_at, rb_reservation_tables(table_id,active)')
+  const {data}=await sb.from('rb_reservations').select('id,guest_name,party_size,status,kind,event_id,assigned_table_id,assigned_combo_id,starts_at,ends_at, rb_reservation_tables(table_id,active)')
     .gte('starts_at',start.toISOString()).lt('starts_at',end.toISOString())
     .eq('location',LOC)
     .not('status','in','("cancelled","no_show")');
   floorRes=data||[]; renderFloor();
 }
 function resOnTable(r,tableId){
-  if(r.kind==='experience') return r.assigned_table_id===tableId;
+  if(r.kind==='experience') return expOnTable(r,tableId);
   return (r.rb_reservation_tables||[]).some(a=>a.active&&a.table_id===tableId);
 }
 function floorIsToday(){ return ($('floorDate').value||todayStr())===todayStr(); }
