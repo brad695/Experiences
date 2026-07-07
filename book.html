@@ -182,6 +182,7 @@
   </div>
 </div>
 
+<script src="https://js.stripe.com/v3/"></script>
 <script>
 const SUPA_URL = 'https://vdvtrevhqalmjwhjhjug.supabase.co';
 const SUPA_KEY = 'sb_publishable_LnlevWReed7K8cFk_f_Mxg_UywktQ5_';
@@ -382,16 +383,52 @@ async function submitExperience(){
       body: JSON.stringify({action:'checkout', reservation_id:r.id, code:r.code, origin:location.origin})
     });
     const pay = await res.json();
-    if(!pay.ok || !pay.url){
+    if(!pay.ok || !(pay.url || pay.client_secret)){
       try{ await rpc('rb_cancel_reservation',{p_code:r.code, p_email:$('exmEmail').value}); }catch(_e){}
       m.className='msg bad'; m.textContent='Could not start payment — your card was not charged. Please try again.';
       btn.disabled=false; btn.textContent='Book experience';
+      return;
+    }
+    if(pay.client_secret){
+      closeExpModal();
+      btn.disabled=false; btn.textContent='Book experience'; m.className='msg';
+      await showExpEmbeddedCheckout(pay);
       return;
     }
     location.href = pay.url;
     return;
   }catch(e){ m.className='msg bad'; m.textContent='Something went wrong. Please try again.'; }
   btn.disabled=false; btn.textContent='Book experience';
+}
+
+/* Embedded checkout: payment form rendered on our page */
+let expEmbedded=null;
+async function showExpEmbeddedCheckout(pay){
+  const card=$('expPayCard'), body=$('expPayBody');
+  card.classList.remove('hidden');
+  body.innerHTML=`<h2>Complete your payment</h2>
+    <p class="note">Your table is held for 30 minutes while you pay.</p>
+    <div id="expCheckout" style="margin:14px 0"></div>
+    <button class="btn ghost" id="expPayCancel">Cancel payment</button>`;
+  $('expPayCancel').onclick=()=>cancelExpPayment(pay.session_id);
+  card.scrollIntoView({behavior:'smooth'});
+  try{
+    const stripe=Stripe(pay.publishable_key);
+    expEmbedded=await stripe.initEmbeddedCheckout({clientSecret:pay.client_secret});
+    expEmbedded.mount('#expCheckout');
+  }catch(_e){
+    body.innerHTML='<h2>Something went wrong</h2><p class="note">Could not load the payment form — your card was not charged. Please try booking again.</p>';
+    try{ await fetch(`${SUPA_URL}/functions/v1/rb-stripe-checkout`,{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'cancel',session_id:pay.session_id})}); }catch(_e2){}
+  }
+}
+async function cancelExpPayment(sid){
+  if(expEmbedded){ try{ expEmbedded.destroy(); }catch(_e){} expEmbedded=null; }
+  const body=$('expPayBody');
+  body.innerHTML='<p class="spin">Cancelling…</p>';
+  try{ await fetch(`${SUPA_URL}/functions/v1/rb-stripe-checkout`,{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'cancel',session_id:sid})}); }catch(_e){}
+  body.innerHTML='<h2>Payment cancelled</h2><p class="note">Your card was not charged and the table hold was released. You can book again below whenever you&rsquo;re ready.</p>';
 }
 
 /* Stripe return: ?exp_session=… (success) or ?exp_cancel=… (backed out) */
