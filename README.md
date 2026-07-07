@@ -56,8 +56,18 @@ RPC functions (called by the pages): `rb_get_availability`, `rb_create_reservati
 - Classes/events hosted in the dining room: open the day in the admin, hit
   **"Block all tables"** on the event — existing reservations are kept, free tables are
   blocked for the event's time window.
-- Payment for experiences is recorded as `unpaid` on the reservation
-  (`total_cents`/`payment_status`); wire Stripe Checkout later if you want prepayment.
+- **Experiences are prepaid via Stripe Checkout.** Booking holds the tables and
+  redirects to Stripe (30-minute session). Edge functions on Supabase:
+  `rb-stripe-checkout` (creates the session; also `status`/`cancel` actions used on
+  return) and `rb-stripe-webhook` (marks `payment_status = paid` on
+  `checkout.session.completed`, cancels the reservation and frees tables on
+  `checkout.session.expired`). The webhook trusts nothing it receives — it re-fetches
+  each event from the Stripe API, so no signing secret is needed. Secrets: only
+  `STRIPE_SECRET_KEY` in Supabase Edge Function secrets. The Stripe session id is
+  stored on the reservation as `external_id = stripe:<id>`. A webhook endpoint must be
+  registered in the Stripe dashboard for `checkout.session.completed/expired` (and the
+  `async_payment_*` pair) pointing at
+  `https://vdvtrevhqalmjwhjhjug.supabase.co/functions/v1/rb-stripe-webhook`.
 
 ## Local preview
 

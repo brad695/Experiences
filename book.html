@@ -130,6 +130,9 @@
 
   <!-- ============ EXPERIENCES ============ -->
   <div id="paneExp" class="hidden">
+    <div class="card hidden" id="expPayCard">
+      <div class="confirm" id="expPayBody"></div>
+    </div>
     <div class="card">
       <h2>Experiences</h2>
       <p class="note" style="margin-top:0">A reserved table and something special on it — pick your experience, then choose any date and time.</p>
@@ -355,7 +358,7 @@ async function loadExpSlots(){
 }
 function updateExpTotal(){
   const total=expCurrent.per_person? expCurrent.price_cents * +$('exmParty').value : expCurrent.price_cents;
-  $('exmTotal').textContent=`Total: ${money(total)} — payment is collected at the restaurant.`;
+  $('exmTotal').textContent=`Total: ${money(total)} — you'll pay securely online to confirm your booking.`;
 }
 function closeExpModal(){ $('expModalBg').classList.remove('open'); }
 
@@ -372,9 +375,58 @@ async function submitExperience(){
     });
     if(!r.ok){ m.className='msg bad'; m.textContent=r.error; if(/just booked/i.test(r.error)) loadExpSlots(); return; }
     m.className='msg ok';
-    m.textContent=`${r.experience} booked for ${r.time}! Confirmation code ${r.code}. Total ${money(r.total_cents)}.`;
+    m.textContent='Table held! Taking you to secure payment…';
+    btn.textContent='Redirecting…';
+    const res = await fetch(`${SUPA_URL}/functions/v1/rb-stripe-checkout`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'checkout', reservation_id:r.id, code:r.code, origin:location.origin})
+    });
+    const pay = await res.json();
+    if(!pay.ok || !pay.url){
+      try{ await rpc('rb_cancel_reservation',{p_code:r.code, p_email:$('exmEmail').value}); }catch(_e){}
+      m.className='msg bad'; m.textContent='Could not start payment — your card was not charged. Please try again.';
+      btn.disabled=false; btn.textContent='Book experience';
+      return;
+    }
+    location.href = pay.url;
+    return;
   }catch(e){ m.className='msg bad'; m.textContent='Something went wrong. Please try again.'; }
-  finally{ btn.disabled=false; btn.textContent='Book experience'; }
+  btn.disabled=false; btn.textContent='Book experience';
+}
+
+/* Stripe return: ?exp_session=… (success) or ?exp_cancel=… (backed out) */
+async function handleStripeReturn(){
+  const q=new URLSearchParams(location.search);
+  const sid=q.get('exp_session'), cid=q.get('exp_cancel');
+  if(!sid && !cid) return;
+  history.replaceState(null,'',location.pathname);
+  showTab('exp');
+  const card=$('expPayCard'), body=$('expPayBody');
+  card.classList.remove('hidden');
+  body.innerHTML='<p class="spin">One moment…</p>';
+  try{
+    const res=await fetch(`${SUPA_URL}/functions/v1/rb-stripe-checkout`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(sid?{action:'status',session_id:sid}:{action:'cancel',session_id:cid})
+    });
+    const r=await res.json();
+    if(sid && r.ok && r.paid){
+      const rr=r.reservation, tz=SETTINGS.timezone||'America/Chicago';
+      const when=new Date(rr.starts_at).toLocaleString('en-US',{timeZone:tz,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+      body.innerHTML=`<h2>You&rsquo;re booked! 🥂</h2>
+        <p>${esc(rr.rb_experience_types?.name||'Experience')} · ${esc(when)} · party of ${rr.party_size} · ${money(rr.total_cents)} paid</p>
+        <p>Your confirmation code:</p><div class="code">${esc(rr.code)}</div>
+        <p class="note">Save this code — you&rsquo;ll need it (with your email) to cancel your reservation.</p>`;
+    }else if(sid){
+      body.innerHTML=`<h2>Payment not completed</h2>
+        <p class="note">Your card was not charged. If you backed out by mistake, just book again below — the table hold is released after 30 minutes.</p>`;
+    }else{
+      body.innerHTML=`<h2>Payment cancelled</h2>
+        <p class="note">Your card was not charged and the table hold was released. You can book again below whenever you&rsquo;re ready.</p>`;
+    }
+  }catch(_e){
+    body.innerHTML='<h2>Something went wrong</h2><p class="note">If you completed payment, your booking is safe — check your email or contact us to confirm.</p>';
+  }
 }
 
 /* ---------- manage ---------- */
@@ -387,7 +439,7 @@ async function cancelBooking(){
   }catch(e){ m.className='msg bad'; m.textContent='Something went wrong. Please try again.'; }
 }
 
-initBooking();
+initBooking().then(handleStripeReturn);
 </script>
 </body>
 </html>
